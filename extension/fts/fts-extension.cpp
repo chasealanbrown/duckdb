@@ -60,6 +60,7 @@ void FTSExtension::Load(DuckDB &db) {
 	create_fts_index_func.named_parameters["strip_accents"] = LogicalType::BOOLEAN;
 	create_fts_index_func.named_parameters["lower"] = LogicalType::BOOLEAN;
 	create_fts_index_func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
+	create_fts_index_func.named_parameters["shingle_len"] = LogicalType::INTEGER;
 	CreatePragmaFunctionInfo create_fts_index_info(create_fts_index_func);
 
 	auto drop_fts_index_func =

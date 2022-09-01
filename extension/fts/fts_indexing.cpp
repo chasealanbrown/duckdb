@@ -31,7 +31,7 @@ string drop_fts_index_query(ClientContext &context, const FunctionParameters &pa
 
 static string indexing_script(const string &input_schema, const string &input_table, const string &input_id,
                               const vector<string> &input_values, const string &stemmer, const string &stopwords,
-                              const string &ignore, bool strip_accents, bool lower) {
+                              const string &ignore, bool strip_accents, bool lower, const int &shingle_len) {
 	// clang-format off
     string result = R"(
         DROP SCHEMA IF EXISTS %fts_schema% CASCADE;
@@ -86,7 +86,7 @@ static string indexing_script(const string &input_schema, const string &input_ta
             %union_fields_query%
         ),
 	    stemmed_stopped AS (
-            SELECT stem(t.w, '%stemmer%') AS term,
+            SELECT stem(t.w, '%stemmer%') AS tmpterm,
 	               t.docid AS docid,
                    t.fieldid AS fieldid
 	        FROM tokenized AS t
@@ -94,10 +94,16 @@ static string indexing_script(const string &input_schema, const string &input_ta
               AND len(t.w) > 0
 	          AND t.w NOT IN (SELECT sw FROM %fts_schema%.stopwords)
         )
-	    SELECT ss.term,
+	    SELECT string_agg(ss.tmpterm) OVER
+                       (PARTITION BY ss.docid
+                        ROWS
+                        BETWEEN
+                        0 PRECEDING AND
+                        %shingle_len%-1 FOLLOWING) AS term,
 	           ss.docid,
 	           ss.fieldid
-        FROM stemmed_stopped AS ss;
+        FROM stemmed_stopped AS ss
+        QUALIFY len(str_split(term, ','))==(%shingle_len%);
 
         ALTER TABLE %fts_schema%.docs ADD len BIGINT;
         UPDATE %fts_schema%.docs d
@@ -227,6 +233,7 @@ static string indexing_script(const string &input_schema, const string &input_ta
 	result = StringUtil::Replace(result, "%input_table%", input_table);
 	result = StringUtil::Replace(result, "%input_id%", input_id);
 	result = StringUtil::Replace(result, "%stemmer%", stemmer);
+	result = StringUtil::Replace(result, "%shingle_len%", to_string(shingle_len));
 
 	return result;
 }
@@ -279,6 +286,11 @@ string create_fts_index_query(ClientContext &context, const FunctionParameters &
 	if (overwrite_entry != parameters.named_parameters.end()) {
 		overwrite = BooleanValue::Get(overwrite_entry->second);
 	}
+	auto shingle_len = 1;
+	auto shingle_len_entry = parameters.named_parameters.find("shingle_len");
+	if (shingle_len_entry != parameters.named_parameters.end()) {
+		shingle_len = IntegerValue::Get(shingle_len_entry->second);
+	}
 
 	// throw error if an index already exists on this table
 	auto &catalog = Catalog::GetCatalog(context);
@@ -317,7 +329,7 @@ string create_fts_index_query(ClientContext &context, const FunctionParameters &
 	}
 
 	return indexing_script(qname.schema, qname.name, doc_id, doc_values, stemmer, stopwords, ignore, strip_accents,
-	                       lower);
+	                       lower, shingle_len);
 }
 
 } // namespace duckdb
